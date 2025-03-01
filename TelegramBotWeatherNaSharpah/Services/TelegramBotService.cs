@@ -92,8 +92,6 @@ namespace TelegramBotWeatherNaSharpah.Services
 
                     if (!string.IsNullOrWhiteSpace(city)) // Перевіряємо, чи залишився якийсь текст
                     {
-                        try
-                        {
                             // Отримуємо дані про погоду
                             string weatherInfo = await GetWeatherAsync(city);
 
@@ -104,24 +102,7 @@ namespace TelegramBotWeatherNaSharpah.Services
                             await AddOrUpdateUser(chatId, username, weatherInfo, city);
 
                             Console.WriteLine($"Успішний запит: {city}");
-                        }
-                        catch (Exception ex)
-                        {
-                            // Якщо виникла помилка, виводимо повідомлення в консоль
-                            Console.WriteLine($"Помилка при запиті погоди для міста {city}: {ex.Message}");
-
-                            // Записуємо помилку в базу даних
-                            string errorMessage = $"Помилка при запиті для міста {city}: {ex.Message}";
-                            await AddOrUpdateUser(chatId, username, errorMessage, city); // Зберігаємо помилку замість погоди
-
-                            // Виводимо повідомлення користувачу
-                            await SendTextMessageAsync(chatId, $"Не вдалося отримати погоду для {city}. Помилка: {ex.Message}");
-
-                            // Логування помилки в консолі
-                            Console.WriteLine($"Запит для міста {city} не вдався: {ex.Message}");
-                        }
                     }
-
                     else
                     {
                         await _botClient.SendTextMessageAsync(chatId, "Вкажіть назву міста після команди /weather.");
