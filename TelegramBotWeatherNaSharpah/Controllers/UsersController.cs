@@ -15,16 +15,19 @@ namespace TelegramBotWeatherNaSharpah
     public class UserController : ControllerBase
     {
         private readonly TelegramBotService _telegramBotService;
+        private readonly WeatherService _weatherService;
+        private readonly UserService _userService;
 
-        public UserController(TelegramBotService telegramBotService)
+        public UserController(TelegramBotService telegramBotService, UserService userService)
         {
             _telegramBotService = telegramBotService;
+            _userService = userService;
         }
 
         [HttpGet("users")]// Endpoint для отримання всіх користувачів
         public async Task<IActionResult> GetAllUsers()
         {
-            List<UserModel> users = await _telegramBotService.GetUsersFromDb();// отримання всіх користувачів
+            List<UserModel> users = await _userService.GetUsersFromDb();// отримання всіх користувачів
             return Ok(users);// виведення всіх користувачів
         }
 
@@ -32,7 +35,7 @@ namespace TelegramBotWeatherNaSharpah
         [HttpGet("users/{userId}/weatherrequests")]
         public async Task<IActionResult> GetWeatherRequestsByUserId(long userId)
         {
-            var weatherRequests = await _telegramBotService.GetWeatherRequestsByUserId(userId); // отримання всіх запитів погоди користувача за ID
+            var weatherRequests = await _userService.GetWeatherRequestsByUserId(userId); // отримання всіх запитів погоди користувача за ID
 
             if (weatherRequests == null || !weatherRequests.Any())
             {
@@ -46,13 +49,23 @@ namespace TelegramBotWeatherNaSharpah
         [HttpPost("sendWeatherToAll")]
         public async Task<IActionResult> SendWeatherToAll([FromBody] string city)
         {
-            List<UserModel> users = await _telegramBotService.GetUsersFromDb();//отримання всіх користувачів
-            string weatherInfo = await _telegramBotService.GetWeatherAsync(city);//отримання погоди
+            List<UserModel> users = await _userService.GetUsersFromDb();//отримання всіх користувачів
+            WeatherResponse weatherInfo = await _weatherService.GetWeatherAsync(city);//отримання погоди
+            string formatedResponce = _weatherService.FormatWeatherInfo(weatherInfo);
             foreach (var user in users)
             {
-                await _telegramBotService.SendTextMessageAsync(user.ChatId, weatherInfo);// надсилання погоди кожному користувачу
+                await _telegramBotService.SendMessage(user.ChatId, formatedResponce);// надсилання погоди кожному користувачу
+
             }
             return Ok();
         }
+
+        [HttpPost("sendFunById")]
+        public async Task<IActionResult> SendFunById(long chatId, string messageText = null, string imageUrl = null, string stickerFileId = null, string audioUrl = null)
+        {
+            await _telegramBotService.SendMessageToUser(chatId,messageText,imageUrl,stickerFileId,audioUrl);
+            return Ok();
+        }
+
     }
 }

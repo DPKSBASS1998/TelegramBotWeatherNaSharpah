@@ -1,11 +1,27 @@
 using TelegramBotWeatherNaSharpah.Services;
+using TelegramBotWeatherNaSharpah.Models;
+using Microsoft.Extensions.DependencyInjection;
+using System.Configuration;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Отримуємо токен з джсон файлу
 var botToken = builder.Configuration["TelegramSettings:BotToken"];
+// Регіструємо сервіси для TelegramBotService і WeatherService в DI контейнері
 builder.Services.AddSingleton<TelegramBotService>(sp =>
-    new TelegramBotService(botToken, sp.GetRequiredService<IConfiguration>()));
+{
+    var configuration = sp.GetRequiredService<IConfiguration>(); // Отримуємо IConfiguration з DI контейнера
+    var weatherService = sp.GetRequiredService<WeatherService>(); // Отримуємо WeatherService з DI контейнера
+    var userService = sp.GetRequiredService<UserService>(); // Отримуємо UserService з DI контейнера
+    return new TelegramBotService(botToken, configuration, weatherService, userService); // Передаємо залежності в TelegramBotService
+});
+
+builder.Services.Configure<WeatherSettings>(builder.Configuration.GetSection("WeatherSettings"));
+builder.Services.AddHttpClient<WeatherService>();
+builder.Services.AddSingleton<UserService>(sp => {
+    var configuration = sp.GetRequiredService<IConfiguration>();
+    return new UserService(configuration);
+});
 
 
 builder.Services.AddControllers();

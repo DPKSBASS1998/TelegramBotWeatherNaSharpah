@@ -6,67 +6,28 @@ using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
 using TelegramBotWeatherNaSharpah.Models;
-using Dapper;
-using Microsoft.Data.SqlClient;
-using System.Data.Common;
+
 
 namespace TelegramBotWeatherNaSharpah.Services
 {
     public class TelegramBotService
     {
         private readonly TelegramBotClient _botClient; // Об'єкт  Telegram API
-        private readonly string _weatherApiKey;// ApiKey до OpenWeather
-        private readonly IDbConnection _dbConnection; // Підключення до бази даних
-        private readonly string _connectionString; // Рядок підключення до БД
+        private readonly WeatherService _weatherService;
+        private readonly UserService _userService;
 
-        // Конструктор
-        public TelegramBotService(string token, IConfiguration configuration)
+        // 
+        public TelegramBotService(string token, IConfiguration configuration, WeatherService weatherService, UserService userService)
         {
             _botClient = new TelegramBotClient(token); // Створення нового екземпляра TelegramBotClient з токеном
-            _connectionString = configuration.GetConnectionString("DefaultConnection"); // Отримуємо рядок підключення
-            _dbConnection = new SqlConnection(_connectionString); // Створюємо з'єднання з БД
-            _weatherApiKey = configuration["WeatherSettings:ApiKey"]; //апіключ
+            _weatherService = weatherService; // Інжектуємо WeatherService
+            _userService = userService;
         }
 
-        // Додатковий метод для спрощення
-        public async Task SendTextMessageAsync(long userId, string message)
+        // Додатковий метод який можна використовувати в інших класах не інжеціюючи TelegramBotClient
+        public async Task SendMessage(long userId, string message)
         {
-            await _botClient.SendTextMessageAsync(userId, message, parseMode: ParseMode.Html);
-        }
-
-        public async Task AddOrUpdateUser(long userId, string username, string weatherInfo, string city)
-        {
-            using (IDbConnection dbConnection = new SqlConnection(_connectionString))
-            {
-                dbConnection.Open();
-
-                // Перевіряємо, чи існує користувач у базі даних
-                var user = await dbConnection.QueryFirstOrDefaultAsync<UserModel>(
-                    "SELECT * FROM Users WHERE ChatId = @ChatId", new { ChatId = userId });
-
-                if (user == null)
-                {
-                    // Якщо користувач відсутній, додаємо нового користувача
-                    var insertUserQuery = "INSERT INTO Users (ChatId, Username) VALUES (@ChatId, @Username)";
-                    await dbConnection.ExecuteAsync(insertUserQuery, new { ChatId = userId, Username = username });
-
-                    // Створюємо новий запит погоди для користувача
-                    var insertWeatherRequestQuery = @"
-                    INSERT INTO WeatherRequests (ChatId, City, WeatherResponse, RequestDate)
-                    VALUES (@ChatId, @City, @WeatherResponse, @RequestDate)";
-                    await dbConnection.ExecuteAsync(insertWeatherRequestQuery,
-                        new { ChatId = userId, City = city, WeatherResponse = weatherInfo, RequestDate = DateTime.Now });
-                }
-                else
-                {
-                    // Якщо користувач існує, просто додаємо новий запит погоди
-                    var insertWeatherRequestQuery = @"
-                    INSERT INTO WeatherRequests (ChatId, City, WeatherResponse, RequestDate)
-                    VALUES (@ChatId, @City, @WeatherResponse, @RequestDate)";
-                    await dbConnection.ExecuteAsync(insertWeatherRequestQuery,
-                        new { ChatId = userId, City = city, WeatherResponse = weatherInfo, RequestDate = DateTime.Now });
-                }
-            }
+            await _botClient.SendMessage(userId, message);
         }
 
         // Метод для обробки оновлень (повідомлень та або кнопок) від користувача
@@ -74,43 +35,39 @@ namespace TelegramBotWeatherNaSharpah.Services
         {
             if (update.Type == UpdateType.Message && update.Message!.Text != null) // перевірямо чи повідомлення є текстовим а не файл і тд
             {
+
                 var message = update.Message.Text;
                 var chatId = update.Message.Chat.Id;
                 var username = update.Message.Chat.Username ?? "Без імені"; // Якщо немає username, ставимо заглушку
 
-                if (message == "/start" || message == "Старт") // Обробка кнопки "Старт"
+                if (message == "/start") // Обробка кнопки "Старт"
                 {
-                    await _botClient.SendTextMessageAsync(
-                        chatId,
-                        "Щоб отримати прогноз погоди, напишіть /weather 'Назва_міста_англійською' або скористайтесь готовими варіантами.",
-                        replyMarkup: GetWeatherButtons() // Відкриваємо меню з містами
-                    );
-                }
-                else if (message.StartsWith("/weather")) // Перевіряємо, чи починається рядок з "/weather"
-                {
-                    string city = message.Replace("/weather", "").Trim(); // Видаляємо "/weather" і обрізаємо всі пробіли
-
-                    if (!string.IsNullOrWhiteSpace(city)) // Перевіряємо, чи залишився якийсь текст
-                    {
-                            // Отримуємо дані про погоду
-                            string weatherInfo = await GetWeatherAsync(city);
-
-                            // Виводимо відповідь
-                            await SendTextMessageAsync(chatId, weatherInfo);
-
-                            // Записуємо запит в БД
-                            await AddOrUpdateUser(chatId, username, weatherInfo, city);
-
-                            Console.WriteLine($"Успішний запит: {city}");
-                    }
-                    else
-                    {
-                        await _botClient.SendTextMessageAsync(chatId, "Вкажіть назву міста після команди /weather.");
-                    }
+                    string msg = "Привіт! Я бот, який може показати тобі погоду в різних містах світу. \n" +
+                                 "Щоб отримати прогноз погоди, напишіть /weather 'Назва_міста";
+                    await _botClient.SendMessage(chatId, msg, replyMarkup: GetWeatherButtons());
                 }
                 else
                 {
-                    await _botClient.SendTextMessageAsync(chatId, "Для отримання інструкції натисніть кнопку /start");
+                    if (!message.StartsWith("/weather"))
+                    {
+                        string msg = "Запит повинен починатись з /weather. \n" +
+                            "Щоб отримати повну інструкцію, напиши /start";
+                        await _botClient.SendMessage(chatId, msg);
+                        return;
+                    }
+
+                    string city = message.Replace("/weather", "").Trim();
+
+                    if (string.IsNullOrWhiteSpace(city))
+                    {
+                        string msg = "Після /weather необхідно вказати назву міста англійською, наприклад: \n/weather Dnipro. \n" +
+                            "Щоб отримати повну інструкцію, напиши /start";
+                        await _botClient.SendMessage(chatId, msg);
+                        return;
+                    }
+
+                    await ProcessWeatherRequestAsync(chatId, username, city);
+
                 }
             }
 
@@ -119,70 +76,44 @@ namespace TelegramBotWeatherNaSharpah.Services
                 var callbackQuery = update.CallbackQuery; // Отримуємо дані про натискання кнопки
                 var chatId = callbackQuery.Message.Chat.Id; // Отримуємо ідентифікатор чату
                 var username = callbackQuery.Message.Chat.Username ?? "Без імені"; // Отримуємо юзернейм, якщо немає то ставимо без імені
-
                 string city = callbackQuery.Data; // Отримуємо дані, які були передані при натисканні кнопки
 
-                string weatherInfo = await GetWeatherAsync(city); // Записуємо результати надісланого запиту
-
-                await AddOrUpdateUser(chatId, username, weatherInfo, city); // додаємо запит в історію запитів юзера 
-                Console.WriteLine(city);
-                await SendTextMessageAsync(chatId, weatherInfo); // виводимо відповідь з форматуванням в хтмл
+                await ProcessWeatherRequestAsync(chatId, username, city);
             }
         }
 
-        // Метод для отримання погоди через везер апі
-        public async Task<string> GetWeatherAsync(string city)
+        private async Task ProcessWeatherRequestAsync(long chatId, string username, string city)
         {
-            using var httpClient = new HttpClient(); // Створюємо екземпляр HttpClient для виконання HTTP запитів
-            string url = $"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={_weatherApiKey}&units=metric&lang=ua"; // Формуємо URL запиту до API
+            // Якщо всі перевірки пройдено, отримуємо погоду
+            WeatherResponse weatherInfo = await _weatherService.GetWeatherAsync(city); //отримання погоди
+
+            if (weatherInfo.ErrorMessage != null)
+            {
+                string msg = $" Помилка при отриманні погоди для міста {city}. {weatherInfo.ErrorMessage}";
+                await _botClient.SendMessage(chatId, msg);
+            }
+            else
+            {
+                string formatedResponce = _weatherService.FormatWeatherInfo(weatherInfo); //форматування погоди
+                await _botClient.SendMessage(chatId, formatedResponce); //надсилання погоди
+            }
+
+            // Збір інформації для бази даних
+            var weatherinfoDB = _weatherService.MapToWeatherResponse(weatherInfo, chatId);
 
             try
             {
-                var response = await httpClient.GetAsync(url); // Виконуємо запит
-
-                if (response.IsSuccessStatusCode) // Перевіряємо, чи успішний статус-код (200-299)
-                {
-                    var responseBody = await response.Content.ReadAsStringAsync(); // Отримуємо відповідь від API
-
-                    // Десеріалізуємо JSON файл
-                    var weatherData = JsonSerializer.Deserialize<JsonElement>(responseBody);
-
-                    // Отримуємо основні дані з JSON відповіді
-                    var weatherCondition = weatherData.GetProperty("weather")[0].GetProperty("description").GetString(); // Опис погодних умов
-                    var temperature = weatherData.GetProperty("main").GetProperty("temp").GetDouble(); // Температура в градусах Цельсія
-                    var feelsLike = weatherData.GetProperty("main").GetProperty("feels_like").GetDouble(); // Відчувається як 
-                    var humidity = weatherData.GetProperty("main").GetProperty("humidity").GetInt32(); // Вологість
-                    var windSpeed = weatherData.GetProperty("wind").GetProperty("speed").GetDouble(); // Швидкість вітру
-                    var cityName = weatherData.GetProperty("name").GetString(); // Назва міста
-
-                    // Формуємо повідомлення у форматі HTML
-                    string weatherInfo = $@"
-                        <b>Погода у {cityName}</b>
-                        <i>Умови:</i> {weatherCondition}
-                        <i>Температура:</i> {temperature}°C
-                        <i>Відчувається як:</i> {feelsLike}°C
-                        <i>Вологість:</i> {humidity}%
-                        <i>Швидкість вітру:</i> {windSpeed} м/с
-                        ";
-
-                    return weatherInfo; // Повертаємо повідомлення
-                }
-                else
-                {
-                    //записуємо відповідь сервера
-                    var errorResponse = await response.Content.ReadAsStringAsync();
-                    string errorMessage = $"Помилка при запиті для міста {city}: {response.StatusCode} - {errorResponse}";
-
-                    return errorMessage; // Повертаємо помилку
-                }
+                // Додавання інформації в базу даних
+                await _userService.AddOrUpdateUser(weatherinfoDB, username);
             }
             catch (Exception ex)
             {
-                // Інші проблеми, мережа і тд
-                Console.WriteLine($"Помилка при запиті до API: {ex.Message}");
-                return $"Не вдалося отримати погоду для міста {city}. Помилка: {ex.Message}";
+                // Логування помилки в разі неуспішного запису в базу даних
+                // Тут можна логувати помилку або надіслати повідомлення адміністратору, якщо потрібно
+                Console.WriteLine($"Помилка при запису в базу даних: {ex.Message}");
             }
         }
+
 
         // Створення кнопок для вибору міста
         private InlineKeyboardMarkup GetWeatherButtons()
@@ -217,35 +148,41 @@ namespace TelegramBotWeatherNaSharpah.Services
         // Метод для запуску бота
         public async Task StartAsync()
         {
-            var me = await _botClient.GetMeAsync(); // Отримуємо інформацію про бота
+            var me = await _botClient.GetMe(); // Отримуємо інформацію про бота
             Console.WriteLine($"Бот {me.Username} запущено!"); // Виводимо повідомлення про запуск бота в консолі
 
-            _botClient.StartReceiving( // Починаємо отримувати оновлення від користувачів
-                async (client, update, token) => await HandleUpdateAsync(update), // Обробляємо оновлення
-                async (client, exception, token) => Console.WriteLine($"Помилка: {exception.Message}") // Логування помилок
+            _botClient.StartReceiving(
+                async (client, update, token) => await HandleUpdateAsync(update),
+                (client, exception, token) => Console.WriteLine($"Помилка: {exception.Message}")
             );
+
         }
 
-        // Отримання всіх користувачів з БД
-        public async Task<List<UserModel>> GetUsersFromDb()
+        // Метод для відправки повідомлення користувачу
+        public async Task SendMessageToUser(long chatId, string messageText = null, string imageUrl = null, string stickerFileId = null, string audioUrl = null)
         {
-            using (IDbConnection dbConnection = new SqlConnection(_connectionString))
+            if (messageText != null)
             {
-                dbConnection.Open();
-                return (await dbConnection.QueryAsync<UserModel>("SELECT * FROM Users")).ToList();
+                await _botClient.SendMessage(chatId, messageText);
+            }
+            else if (imageUrl != null)
+            {
+                await _botClient.SendPhoto(chatId, imageUrl);
+            }
+            else if (stickerFileId != null)
+            {
+                await _botClient.SendSticker(chatId, stickerFileId);
+            }
+            else if (audioUrl != null)
+            {
+                await _botClient.SendVoice(chatId, audioUrl);
+            }
+            else
+            {
+                // Якщо жоден з параметрів не заповнений
+                await _botClient.SendMessage(chatId, "Невідомий тип повідомлення");
             }
         }
 
-        // Отримання запитів погоди за ID користувача
-        public async Task<List<WeatherRequest>> GetWeatherRequestsByUserId(long userId)
-        {
-            using (IDbConnection dbConnection = new SqlConnection(_connectionString))
-            {
-                dbConnection.Open();
-                return (await dbConnection.QueryAsync<WeatherRequest>(
-                    "SELECT * FROM WeatherRequests WHERE ChatId = @ChatId", new { ChatId = userId }
-                )).ToList();
-            }
-        }
     }
 }
